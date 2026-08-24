@@ -6,9 +6,11 @@
 #include <sys/socket.h>
 #include <netdb.h>
 #include <poll.h>
+#include <arpa/inet.h>
 
 #define PORT "9034"
 #define BACKLOG 10
+#define MAXDATASIZE 100
 
 typedef struct {
         char username[32];
@@ -30,11 +32,13 @@ int main(void) {
     int rv;
     int listenfd;
     int yes = 1;
+    char buf[MAXDATASIZE];
     
     struct pollfd *fds = NULL;
     Client *clients = NULL;
     int c_count = 0;
     int c_size = 0;
+    char str[INET6_ADDRSTRLEN];
 
     //listener config settings
     memset(&hints, 0, sizeof hints);
@@ -80,6 +84,90 @@ int main(void) {
     add_client(&fds, &clients, listenfd, &c_count, &c_size);
     
     // TODO: MAIN CONTROL LOOP - poll() loop goes here 
+    while (1) {
+
+        int poll_count = poll(fds, c_count, -1);
+        if (poll_count == -1){
+            perror("poll");
+            exit(1);
+        }
+
+        for(int i = 0; i < c_count; i++){
+            //NO EVENTS
+            if((fds[i].revents & POLLIN) == 0){
+                continue;
+            }
+
+            //LISTENER SOCKET READY
+            if(fds[i].fd == listenfd){
+                struct sockaddr_storage their_addr;
+                socklen_t addr_size = sizeof their_addr;
+                int newfd = accept(listenfd, (struct sockaddr *)&their_addr, &addr_size);
+                if(newfd == -1){
+                    perror("accept");
+                    continue;
+                }
+                add_client(&fds, &clients, newfd, &c_count, &c_size);
+                inet_ntop(their_addr.ss_family, get_in_addr((struct sockaddr *)&their_addr), str, sizeof str);
+                printf("server: new connection from %s on socket %d\n", str, newfd);
+                send_to_one(newfd, "Welcome to the chat server! Please set your username:\n");
+            }
+            
+            //CLIENT SOCKET READY
+            else{
+                memset(buf, 0, sizeof buf);
+                int nbytes = recv(fds[i].fd, buf, sizeof buf, 0);
+
+                //CLIENT DISCONNECTED OR RECV() FAIL
+                if(nbytes <= 0){
+                    if(nbytes == 0){
+                        if(clients[i].has_username) {
+                            char message[MAXDATASIZE + 32 + 8];
+                            snprintf(message, sizeof message, "%s has disconnected.\n", clients[i].username);
+                            broadcast(fds, c_count, fds[i].fd, listenfd, message);
+                        }
+                        else{
+                            printf("server: socket %d hung up\n", fds[i].fd);
+                        } 
+                    } 
+                    else {
+                        perror("recv");
+                    }
+                    close(fds[i].fd);
+                    remove_client(fds, clients, i, &c_count);
+                    i--;
+                } 
+                //REAL DATA RECEIVED
+                //SET USERNAME
+                else {
+                    trim_newline(buf);
+                    if(!clients[i].has_username){
+                        if(find_client_by_username(clients, c_count, buf) != -1){
+                            send_to_one(fds[i].fd, "Username already taken. Please choose another one.\n");
+                        } 
+                        else {
+                            strncpy(clients[i].username, buf, sizeof clients[i].username - 1);
+                            clients[i].has_username = 1;
+                            send_to_one(fds[i].fd, "Username set successfully.\n");
+                            char join_msg[64];
+                            snprintf(join_msg, sizeof join_msg, "%s has joined\n", clients[i].username);
+                            broadcast(fds, c_count, fds[i].fd, listenfd, join_msg);
+                        }
+                    } 
+                    //BROADCAST MESSAGE
+                    else {
+                            trim_newline(buf);
+                            char message[MAXDATASIZE + 32 + 8];
+                            snprintf(message, sizeof message, "%s: %s\n", clients[i].username, buf);
+                            broadcast(fds, c_count, fds[i].fd, listenfd, message);
+                    }
+                    
+                }
+            }    
+       
+        }
+            
+    }
 
     close(listenfd);
     return 0;
