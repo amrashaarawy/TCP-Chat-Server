@@ -23,8 +23,11 @@ void remove_client(struct pollfd *fds, Client *clients, int i, int *count);
 int find_client_by_username(Client *clients, int count, const char *name);
 void trim_newline(char *str);
 void broadcast(struct pollfd *fds, int count, int sender_fd, int listenfd, const char *msg);
-void send_to_one(int fd, const char *msg); 
+void send_to_one(int fd, const char *msg);
 int sendall(int s, const char *buf, int *len);
+int handle_command(struct pollfd *fds, Client *clients, int i, int c_count, int listenfd, char *buf);
+void send_client_list(struct pollfd *fds, Client *clients, int c_count, int listenfd, int requester_fd);
+int try_set_username(struct pollfd *fds, Client *clients, int i, int c_count, const char *name);
 
 int main(void) {
 
@@ -110,7 +113,8 @@ int main(void) {
                 add_client(&fds, &clients, newfd, &c_count, &c_size);
                 inet_ntop(their_addr.ss_family, get_in_addr((struct sockaddr *)&their_addr), str, sizeof str);
                 printf("server: new connection from %s on socket %d\n", str, newfd);
-                send_to_one(newfd, "Welcome to the chat server! Please set your username:\n");
+                send_to_one(newfd, "Welcome to the chat server! Please set your username using /username <name>:\n");
+                send_to_one(newfd, "Commands: \n /username <new name>\n /list\n /disconnect\n\n");
             }
             
             //CLIENT SOCKET READY
@@ -123,7 +127,7 @@ int main(void) {
                     if(nbytes == 0){
                         if(clients[i].has_username) {
                             char message[MAXDATASIZE + 32 + 8];
-                            snprintf(message, sizeof message, "%s has disconnected.\n", clients[i].username);
+                            snprintf(message, sizeof message, "%s has been disconnected.\n", clients[i].username);
                             broadcast(fds, c_count, fds[i].fd, listenfd, message);
                         }
                         else{
@@ -142,26 +146,40 @@ int main(void) {
                 else {
                     trim_newline(buf);
                     if(!clients[i].has_username){
-                        if(find_client_by_username(clients, c_count, buf) != -1){
-                            send_to_one(fds[i].fd, "Username already taken. Please choose another one.\n");
-                        } 
-                        else {
-                            strncpy(clients[i].username, buf, sizeof clients[i].username - 1);
+                        char cmd[32] = {0};
+                        char arg[MAXDATASIZE] = {0};
+                        sscanf(buf, "%31s %99[^\n]", cmd, arg);
+
+                        if (strcmp(cmd, "/username") != 0) {
+                            send_to_one(fds[i].fd, "Please set a username first: /username <name>\n");
+                        }
+                        else if (try_set_username(fds, clients, i, c_count, arg)) {
                             clients[i].has_username = 1;
                             send_to_one(fds[i].fd, "Username set successfully.\n");
                             char join_msg[64];
                             snprintf(join_msg, sizeof join_msg, "%s has joined\n", clients[i].username);
                             broadcast(fds, c_count, fds[i].fd, listenfd, join_msg);
                         }
-                    } 
-                    //BROADCAST MESSAGE
-                    else {
-                            trim_newline(buf);
-                            char message[MAXDATASIZE + 32 + 8];
-                            snprintf(message, sizeof message, "%s: %s\n", clients[i].username, buf);
-                            broadcast(fds, c_count, fds[i].fd, listenfd, message);
                     }
-                    
+                    //COMMAND OR BROADCAST MESSAGE
+                    else {
+                            if (buf[0] == '/') {
+                                int disconnect_requested = handle_command(fds, clients, i, c_count, listenfd, buf);
+                                if (disconnect_requested) {
+                                    char message[MAXDATASIZE + 32 + 8];
+                                    snprintf(message, sizeof message, "%s has left the chat.\n", clients[i].username);
+                                    broadcast(fds, c_count, fds[i].fd, listenfd, message);
+                                    close(fds[i].fd);
+                                    remove_client(fds, clients, i, &c_count);
+                                    i--;
+                                }
+                            } else {
+                                char message[MAXDATASIZE + 32 + 8];
+                                snprintf(message, sizeof message, "%s: %s\n", clients[i].username, buf);
+                                broadcast(fds, c_count, fds[i].fd, listenfd, message);
+                            }
+                    }
+
                 }
             }    
        
@@ -250,4 +268,73 @@ int sendall(int s, const char *buf, int *len) {
 
     *len = total;
     return n == -1 ? -1 : 0;
+}
+
+int handle_command(struct pollfd *fds, Client *clients, int i, int c_count, int listenfd, char *buf) {
+    char cmd[32] = {0};
+    char arg[MAXDATASIZE] = {0};
+    sscanf(buf, "%31s %99[^\n]", cmd, arg);
+
+    if (strcmp(cmd, "/username") == 0) {
+        char old_name[32];
+        strncpy(old_name, clients[i].username, sizeof old_name - 1);
+        old_name[sizeof old_name - 1] = '\0';
+
+        if (try_set_username(fds, clients, i, c_count, arg)) {
+            send_to_one(fds[i].fd, "Username changed successfully.\n");
+            char msg[96];
+            snprintf(msg, sizeof msg, "%s is now known as %s\n", old_name, clients[i].username);
+            broadcast(fds, c_count, fds[i].fd, listenfd, msg);
+        }
+        return 0;
+    }
+
+    if (strcmp(cmd, "/list") == 0) {
+        send_client_list(fds, clients, c_count, listenfd, fds[i].fd);
+        return 0;
+    }
+
+    if (strcmp(cmd, "/disconnect") == 0) {
+        send_to_one(fds[i].fd, "Disconnecting...\n");
+        return 1;
+    }
+
+    send_to_one(fds[i].fd, "Unknown command. Available commands: /username <name>, /list, /disconnect\n");
+    return 0;
+}
+
+int try_set_username(struct pollfd *fds, Client *clients, int i, int c_count, const char *name) {
+    if (name[0] == '\0') {
+        send_to_one(fds[i].fd, "Usage: /username <name>\n");
+        return 0;
+    }
+    if (find_client_by_username(clients, c_count, name) != -1) {
+        send_to_one(fds[i].fd, "Username already taken. Please choose another one.\n");
+        return 0;
+    }
+    strncpy(clients[i].username, name, sizeof clients[i].username - 1);
+    clients[i].username[sizeof clients[i].username - 1] = '\0';
+    return 1;
+}
+
+void send_client_list(struct pollfd *fds, Client *clients, int c_count, int listenfd, int requester_fd) {
+    char list_msg[1024];
+    int offset = snprintf(list_msg, sizeof list_msg, "Connected users:\n");
+
+    for (int j = 0; j < c_count && offset < (int)sizeof list_msg; j++) {
+
+        if (fds[j].fd == listenfd || !clients[j].has_username) { continue; }
+
+        int n = snprintf(list_msg + offset, sizeof list_msg - offset, "- %s%s\n",
+                          clients[j].username, fds[j].fd == requester_fd ? " (you)" : "");
+        if (n < 0) { break; }
+        offset += n;
+    }
+
+    if (offset >= (int)sizeof list_msg) {
+        offset = sizeof list_msg - 1;
+    }
+    list_msg[offset] = '\0';
+
+    send_to_one(requester_fd, list_msg);
 }

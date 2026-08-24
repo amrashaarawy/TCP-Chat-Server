@@ -1,5 +1,5 @@
 /*
-** client.c -- a stream socket client demo
+** client.c - full client code
 */
 
 #include <stdio.h>
@@ -91,9 +91,9 @@ int main(int argc, char *argv[])
                 
             int recvd = recv(sockfd, buf, sizeof(buf), 0);
             if(recvd == 0){
-                printf("client: server closed connection\n");
+                printf("client: connection closed\n");
                 break;
-            } 
+            }  
             else if(recvd == -1){
                 perror("recv");
                 exit(1);
@@ -115,7 +115,7 @@ int main(int argc, char *argv[])
             if (send_line(sockfd, buf) == -1){
                 perror("send");
                 break;
-            }        
+            }
         }
     }
     close(sockfd);
