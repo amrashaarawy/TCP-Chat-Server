@@ -146,19 +146,27 @@ int main(void) {
                 else {
                     trim_newline(buf);
                     if(!clients[i].has_username){
-                        char cmd[32] = {0};
-                        char arg[MAXDATASIZE] = {0};
-                        sscanf(buf, "%31s %99[^\n]", cmd, arg);
+                        if(strcmp(buf, "/disconnect") == 0){
+                            send_to_one(fds[i].fd, "Disconnecting...\n");
+                            close(fds[i].fd);
+                            remove_client(fds, clients, i, &c_count);
+                            i--;
+                        }   
+                        else{ 
+                            char cmd[32] = {0};
+                            char arg[MAXDATASIZE] = {0};
+                            sscanf(buf, "%31s %99[^\n]", cmd, arg);
 
-                        if (strcmp(cmd, "/username") != 0) {
-                            send_to_one(fds[i].fd, "Please set a username first: /username <name>\n");
-                        }
-                        else if (try_set_username(fds, clients, i, c_count, arg)) {
-                            clients[i].has_username = 1;
-                            send_to_one(fds[i].fd, "Username set successfully.\n");
-                            char join_msg[64];
-                            snprintf(join_msg, sizeof join_msg, "%s has joined\n", clients[i].username);
-                            broadcast(fds, c_count, fds[i].fd, listenfd, join_msg);
+                            if (strcmp(cmd, "/username") != 0) {
+                                send_to_one(fds[i].fd, "Please set a username first: /username <name>\n");
+                            }
+                            else if (try_set_username(fds, clients, i, c_count, arg)) {
+                                clients[i].has_username = 1;
+                                send_to_one(fds[i].fd, "Username set successfully.\n");
+                                char join_msg[64];
+                                snprintf(join_msg, sizeof join_msg, "%s has joined\n", clients[i].username);
+                                broadcast(fds, c_count, fds[i].fd, listenfd, join_msg);
+                            }
                         }
                     }
                     //COMMAND OR BROADCAST MESSAGE

@@ -106,15 +106,25 @@ int main(int argc, char *argv[])
 
         if(fds[1].revents & POLLIN){
  
-            if(fgets(buf, sizeof(buf), stdin) == NULL){
-                printf("client: EOF on stdin, exiting\n");
-                break;
-            }
-             
-            trim_newline(buf);
-            if (send_line(sockfd, buf) == -1){
-                perror("send");
-                break;
+            if(fds[1].revents & POLLIN){
+               
+                if(fgets(buf, sizeof(buf), stdin) == NULL){
+                    printf("client: EOF on stdin, exiting\n");
+                    break;
+                }
+
+                if (strchr(buf, '\n') == NULL) {
+                    printf("Message too long — max %d characters. Please try again.\n", MAXDATASIZE - 1);
+                    int c;
+                    while ((c = getchar()) != '\n' && c != EOF);
+                    continue;
+                }
+
+                trim_newline(buf);
+                if (send_line(sockfd, buf) == -1){
+                    perror("send");
+                    break;
+                }        
             }
         }
     }
