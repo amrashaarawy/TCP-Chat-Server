@@ -126,6 +126,7 @@ int main(void) {
                 if(nbytes <= 0){
                     if(nbytes == 0){
                         if(clients[i].has_username) {
+                            printf("server: %s disconnected (socket %d)\n", clients[i].username, fds[i].fd);
                             char message[MAXDATASIZE + 32 + 8];
                             snprintf(message, sizeof message, "%s has been disconnected.\n", clients[i].username);
                             broadcast(fds, c_count, fds[i].fd, listenfd, message);
@@ -146,12 +147,14 @@ int main(void) {
                 else {
                     trim_newline(buf);
                     if(!clients[i].has_username){
+
                         if(strcmp(buf, "/disconnect") == 0){
                             send_to_one(fds[i].fd, "Disconnecting...\n");
+                            printf("server: socket %d disconnected via /disconnect (no username set)\n", fds[i].fd);
                             close(fds[i].fd);
                             remove_client(fds, clients, i, &c_count);
                             i--;
-                        }   
+                        }
                         else{ 
                             char cmd[32] = {0};
                             char arg[MAXDATASIZE] = {0};
@@ -161,6 +164,7 @@ int main(void) {
                                 send_to_one(fds[i].fd, "Please set a username first: /username <name>\n");
                             }
                             else if (try_set_username(fds, clients, i, c_count, arg)) {
+                                printf("server: socket %d set username to %s\n", fds[i].fd, clients[i].username);
                                 clients[i].has_username = 1;
                                 send_to_one(fds[i].fd, "Username set successfully.\n");
                                 char join_msg[64];
@@ -174,6 +178,7 @@ int main(void) {
                             if (buf[0] == '/') {
                                 int disconnect_requested = handle_command(fds, clients, i, c_count, listenfd, buf);
                                 if (disconnect_requested) {
+                                    printf("server: %s disconnected via /disconnect (socket %d)\n", clients[i].username, fds[i].fd);
                                     char message[MAXDATASIZE + 32 + 8];
                                     snprintf(message, sizeof message, "%s has left the chat.\n", clients[i].username);
                                     broadcast(fds, c_count, fds[i].fd, listenfd, message);
